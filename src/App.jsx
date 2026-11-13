@@ -1,232 +1,278 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react'
+import { Routes, Route, Navigate, useNavigate } from 'react-router-dom'
 
-// Componente principal de la aplicación EDÉN
-export default function App() {
-  // Estado para almacenar el token JWT
-  const [token, setToken] = useState(localStorage.getItem('token') || '');
-  // Estado para almacenar el usuario autenticado
-  const [user, setUser] = useState(null);
-  // Estados para formularios de login y registro
-  const [formMode, setFormMode] = useState('login'); // 'login' o 'register'
-  const [username, setUsername] = useState('');
-  const [password, setPassword] = useState('');
-  // Estado para mensajes de error o info
-  const [message, setMessage] = useState('');
-  // Estado para controlar carga de datos
-  const [loading, setLoading] = useState(false);
+// Estilos propios
+import './style.css'
 
-  // Función para limpiar estado de formulario y mensajes
-  function resetForm() {
-    setUsername('');
-    setPassword('');
-    setMessage('');
-  }
+// Componentes de páginas
+function Login({ onLogin }) {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState(null)
+  const navigate = useNavigate()
 
-  // Función para guardar token en localStorage y estado
-  function saveToken(newToken) {
-    localStorage.setItem('token', newToken);
-    setToken(newToken);
-  }
-
-  // Función para eliminar token y usuario (logout)
-  function logout() {
-    localStorage.removeItem('token');
-    setToken('');
-    setUser(null);
-    resetForm();
-  }
-
-  // Función para obtener datos del usuario autenticado (/auth/me)
-  async function fetchUser(token) {
-    setLoading(true);
-    try {
-      const res = await fetch('/api/auth/me', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error('No autorizado');
-      const data = await res.json();
-      setUser(data);
-      setMessage('');
-    } catch {
-      logout();
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  // Efecto para cargar usuario si hay token
-  useEffect(() => {
-    if (token) {
-      fetchUser(token);
-    } else {
-      setUser(null);
-    }
-  }, [token]);
-
-  // Función para manejar login o registro
+  // Maneja el envío del formulario de login
   async function handleSubmit(e) {
-    e.preventDefault();
-    setLoading(true);
-    setMessage('');
+    e.preventDefault()
+    setError(null)
     try {
-      const url = formMode === 'login' ? '/api/auth/login' : '/api/auth/register';
-      const body = new URLSearchParams();
-      body.append('username', username);
-      body.append('password', password);
+      const params = new URLSearchParams()
+      params.append('username', username)
+      params.append('password', password)
 
-      const res = await fetch(url, {
+      const res = await fetch('/api/auth/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body,
-      });
+        body: params.toString(),
+      })
 
       if (!res.ok) {
-        if (res.status === 400) {
-          const errData = await res.json().catch(() => null);
-          setMessage(errData?.detail || 'Error en las credenciales');
+        if (res.status === 401) {
+          setError('Usuario o contraseña incorrectos')
         } else {
-          setMessage('Error en la conexión con el servidor');
+          setError('Error en el servidor, intente más tarde')
         }
-        return;
+        return
       }
 
-      const data = await res.json();
-
-      if (formMode === 'login') {
-        saveToken(data.access_token);
-        setMessage('');
+      const data = await res.json()
+      if (data.access_token) {
+        localStorage.setItem('token', data.access_token)
+        onLogin()
+        navigate('/')
       } else {
-        // Registro exitoso, cambiar a login para que inicie sesión
-        setMessage('Registro exitoso. Por favor, inicie sesión.');
-        setFormMode('login');
-        resetForm();
+        setError('Respuesta inválida del servidor')
       }
     } catch {
-      setMessage('Error inesperado. Intente nuevamente.');
-    } finally {
-      setLoading(false);
+      setError('No se pudo conectar con el servidor')
     }
   }
 
-  // Componente para mostrar formulario de login o registro
-  function AuthForm() {
-    return (
-      <div className="auth-container">
-        <h2>{formMode === 'login' ? 'Iniciar Sesión' : 'Registro'}</h2>
-        <form onSubmit={handleSubmit} className="auth-form" autoComplete="off">
-          <label htmlFor="username">Usuario</label>
+  return (
+    <div className="auth-container">
+      <h2>Iniciar sesión</h2>
+      <form onSubmit={handleSubmit} className="auth-form">
+        <label>
+          Usuario
           <input
-            id="username"
             type="text"
             value={username}
             onChange={e => setUsername(e.target.value)}
             required
-            autoFocus
             autoComplete="username"
-            disabled={loading}
           />
-          <label htmlFor="password">Contraseña</label>
+        </label>
+        <label>
+          Contraseña
           <input
-            id="password"
             type="password"
             value={password}
             onChange={e => setPassword(e.target.value)}
             required
-            autoComplete={formMode === 'login' ? 'current-password' : 'new-password'}
-            disabled={loading}
+            autoComplete="current-password"
           />
-          <button type="submit" disabled={loading}>
-            {loading ? 'Procesando...' : formMode === 'login' ? 'Entrar' : 'Registrar'}
-          </button>
-        </form>
-        {message && <p className="message">{message}</p>}
-        <p className="toggle-link">
-          {formMode === 'login' ? (
-            <>
-              ¿No tienes cuenta?{' '}
-              <button onClick={() => { setFormMode('register'); resetForm(); }} disabled={loading} className="link-button">
-                Regístrate aquí
-              </button>
-            </>
-          ) : (
-            <>
-              ¿Ya tienes cuenta?{' '}
-              <button onClick={() => { setFormMode('login'); resetForm(); }} disabled={loading} className="link-button">
-                Inicia sesión
-              </button>
-            </>
-          )}
-        </p>
-      </div>
-    );
-  }
-
-  // Componente para la pantalla principal protegida (ejemplo básico)
-  function Dashboard() {
-    // Estado para datos de ejemplo o reales
-    const [data, setData] = useState(null);
-    const [loadingData, setLoadingData] = useState(false);
-    const [errorData, setErrorData] = useState('');
-
-    // Ejemplo de fetch protegido a /api/protected (puede cambiarse por rutas reales)
-    useEffect(() => {
-      async function loadData() {
-        setLoadingData(true);
-        setErrorData('');
-        try {
-          const res = await fetch('/api/protected', {
-            headers: { Authorization: `Bearer ${token}` },
-          });
-          if (!res.ok) throw new Error('No autorizado');
-          const json = await res.json();
-          setData(json);
-        } catch {
-          // Datos de ejemplo como respaldo
-          setData({
-            welcome: `Bienvenido, ${user.username}`,
-            info: 'Esta es información de ejemplo porque no se pudo cargar la real.',
-          });
-          setErrorData('No se pudo cargar la información real.');
-        } finally {
-          setLoadingData(false);
-        }
-      }
-      loadData();
-    }, [token, user]);
-
-    return (
-      <div className="dashboard-container">
-        <header className="dashboard-header">
-          <h1>EDÉN - Asistente Empresarial Inteligente</h1>
-          <div>
-            <span>Usuario: {user.username}</span>{' '}
-            <button onClick={logout} className="logout-button" title="Cerrar sesión">
-              Salir
-            </button>
-          </div>
-        </header>
-        <main className="dashboard-main">
-          {loadingData ? (
-            <p>Cargando datos...</p>
-          ) : (
-            <>
-              {errorData && <p className="error">{errorData}</p>}
-              <section className="dashboard-welcome">
-                <h2>{data?.welcome}</h2>
-                <p>{data?.info}</p>
-              </section>
-              {/* Aquí se pueden agregar más componentes y rutas internas */}
-            </>
-          )}
-        </main>
-      </div>
-    );
-  }
-
-  // Renderizado condicional según si hay usuario autenticado
-  return (
-    <div className="app-container">
-      {user ? <Dashboard /> : <AuthForm />}
+        </label>
+        {error && <p className="error">{error}</p>}
+        <button type="submit">Entrar</button>
+      </form>
+      <p>
+        ¿No tienes cuenta? <a href="/register" onClick={e => { e.preventDefault(); navigate('/register') }}>Regístrate</a>
+      </p>
     </div>
-  );
+  )
+}
+
+function Register() {
+  const [username, setUsername] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState(null)
+  const [success, setSuccess] = useState(null)
+  const navigate = useNavigate()
+
+  // Maneja el envío del formulario de registro
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError(null)
+    setSuccess(null)
+    try {
+      const params = new URLSearchParams()
+      params.append('username', username)
+      params.append('password', password)
+
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: params.toString(),
+      })
+
+      if (res.status === 201) {
+        setSuccess('Registro exitoso. Ahora puedes iniciar sesión.')
+        setUsername('')
+        setPassword('')
+        setTimeout(() => navigate('/login'), 2000)
+      } else if (res.status === 400) {
+        const data = await res.json()
+        setError(data.detail || 'Error en los datos enviados')
+      } else {
+        setError('Error en el servidor, intente más tarde')
+      }
+    } catch {
+      setError('No se pudo conectar con el servidor')
+    }
+  }
+
+  return (
+    <div className="auth-container">
+      <h2>Registro de usuario</h2>
+      <form onSubmit={handleSubmit} className="auth-form">
+        <label>
+          Usuario
+          <input
+            type="text"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            required
+            autoComplete="username"
+          />
+        </label>
+        <label>
+          Contraseña
+          <input
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            autoComplete="new-password"
+          />
+        </label>
+        {error && <p className="error">{error}</p>}
+        {success && <p className="success">{success}</p>}
+        <button type="submit">Registrar</button>
+      </form>
+      <p>
+        ¿Ya tienes cuenta? <a href="/login" onClick={e => { e.preventDefault(); navigate('/login') }}>Inicia sesión</a>
+      </p>
+    </div>
+  )
+}
+
+// Componente para proteger rutas que requieren autenticación
+function PrivateRoute({ children }) {
+  const token = localStorage.getItem('token')
+  if (!token) {
+    return <Navigate to="/login" replace />
+  }
+  return children
+}
+
+// Página principal protegida (dashboard simplificado)
+function Dashboard() {
+  const [user, setUser] = useState(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState(null)
+  const navigate = useNavigate()
+
+  // Carga datos del usuario autenticado
+  useEffect(() => {
+    async function fetchUser() {
+      const token = localStorage.getItem('token')
+      if (!token) {
+        setLoading(false)
+        return
+      }
+      try {
+        const res = await fetch('/api/auth/me', {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (res.ok) {
+          const data = await res.json()
+          setUser(data)
+        } else {
+          // Token inválido o expirado
+          localStorage.removeItem('token')
+          navigate('/login')
+        }
+      } catch {
+        setError('No se pudo conectar con el servidor')
+      } finally {
+        setLoading(false)
+      }
+    }
+    fetchUser()
+  }, [navigate])
+
+  // Cierra sesión
+  function logout() {
+    localStorage.removeItem('token')
+    navigate('/login')
+  }
+
+  if (loading) {
+    return <div className="loading">Cargando...</div>
+  }
+
+  if (error) {
+    return <div className="error">{error}</div>
+  }
+
+  return (
+    <div className="dashboard">
+      <header>
+        <h1>Bienvenido, {user?.username || 'Usuario'}</h1>
+        <button onClick={logout} className="btn-logout">Cerrar sesión</button>
+      </header>
+      <main>
+        <p>Esta es la página principal del asistente empresarial EDÉN.</p>
+        <p>Desde aquí podrás gestionar cotizaciones, proyectos, tareas y más.</p>
+        {/* Aquí se pueden agregar más componentes y rutas internas */}
+      </main>
+    </div>
+  )
+}
+
+export default function App() {
+  const [isAuthenticated, setIsAuthenticated] = useState(false)
+
+  // Verifica si hay token en localStorage al montar
+  useEffect(() => {
+    const token = localStorage.getItem('token')
+    setIsAuthenticated(!!token)
+  }, [])
+
+  // Actualiza estado al iniciar sesión o registro exitoso
+  function handleLogin() {
+    setIsAuthenticated(true)
+  }
+
+  return (
+    <Routes>
+      <Route
+        path="/login"
+        element={
+          isAuthenticated ? <Navigate to="/" replace /> : <Login onLogin={handleLogin} />
+        }
+      />
+      <Route
+        path="/register"
+        element={
+          isAuthenticated ? <Navigate to="/" replace /> : <Register />
+        }
+      />
+      <Route
+        path="/"
+        element={
+          <PrivateRoute>
+            <Dashboard />
+          </PrivateRoute>
+        }
+      />
+      {/* Ruta comodín para redirigir a login si no está autenticado */}
+      <Route
+        path="*"
+        element={
+          isAuthenticated ? <Navigate to="/" replace /> : <Navigate to="/login" replace />
+        }
+      />
+    </Routes>
+  )
 }
