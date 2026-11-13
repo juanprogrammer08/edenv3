@@ -4,178 +4,229 @@ import React, { useState, useEffect } from 'react';
 export default function App() {
   // Estado para almacenar el token JWT
   const [token, setToken] = useState(localStorage.getItem('token') || '');
-  // Estado para controlar si el usuario está autenticado
-  const [isAuthenticated, setIsAuthenticated] = useState(false);
-  // Estado para almacenar datos del usuario autenticado
+  // Estado para almacenar el usuario autenticado
   const [user, setUser] = useState(null);
-  // Estado para controlar la carga de la app
-  const [loading, setLoading] = useState(true);
-  // Estado para controlar errores en login/registro
-  const [error, setError] = useState('');
+  // Estados para formularios de login y registro
+  const [formMode, setFormMode] = useState('login'); // 'login' o 'register'
+  const [username, setUsername] = useState('');
+  const [password, setPassword] = useState('');
+  // Estado para mensajes de error o info
+  const [message, setMessage] = useState('');
+  // Estado para controlar carga de datos
+  const [loading, setLoading] = useState(false);
 
-  // Datos de ejemplo para respaldo en caso de fallo de API
-  const exampleData = {
-    message: 'Bienvenido a EDÉN - Asistente Empresarial Inteligente',
-  };
+  // Función para limpiar estado de formulario y mensajes
+  function resetForm() {
+    setUsername('');
+    setPassword('');
+    setMessage('');
+  }
 
-  // Función para validar el token y obtener datos del usuario
+  // Función para guardar token en localStorage y estado
+  function saveToken(newToken) {
+    localStorage.setItem('token', newToken);
+    setToken(newToken);
+  }
+
+  // Función para eliminar token y usuario (logout)
+  function logout() {
+    localStorage.removeItem('token');
+    setToken('');
+    setUser(null);
+    resetForm();
+  }
+
+  // Función para obtener datos del usuario autenticado (/auth/me)
   async function fetchUser(token) {
+    setLoading(true);
     try {
       const res = await fetch('/api/auth/me', {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
-      if (!res.ok) throw new Error('Token inválido');
+      if (!res.ok) throw new Error('No autorizado');
       const data = await res.json();
       setUser(data);
-      setIsAuthenticated(true);
+      setMessage('');
     } catch {
-      setUser(null);
-      setIsAuthenticated(false);
-      setToken('');
-      localStorage.removeItem('token');
+      logout();
     } finally {
       setLoading(false);
     }
   }
 
-  // Efecto para validar token al montar el componente
+  // Efecto para cargar usuario si hay token
   useEffect(() => {
     if (token) {
       fetchUser(token);
     } else {
-      setLoading(false);
+      setUser(null);
     }
   }, [token]);
 
-  // Maneja el envío del formulario de login o registro
-  async function handleAuth(event, mode) {
-    event.preventDefault();
-    setError('');
-    const form = event.target;
-    const formData = new URLSearchParams();
-    formData.append('username', form.username.value.trim());
-    formData.append('password', form.password.value);
-
+  // Función para manejar login o registro
+  async function handleSubmit(e) {
+    e.preventDefault();
+    setLoading(true);
+    setMessage('');
     try {
-      const res = await fetch(`/api/auth/${mode}`, {
+      const url = formMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+      const body = new URLSearchParams();
+      body.append('username', username);
+      body.append('password', password);
+
+      const res = await fetch(url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/x-www-form-urlencoded',
-        },
-        body: formData.toString(),
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body,
       });
+
       if (!res.ok) {
-        if (res.status === 400 || res.status === 401) {
-          setError('Usuario o contraseña incorrectos');
+        if (res.status === 400) {
+          const errData = await res.json().catch(() => null);
+          setMessage(errData?.detail || 'Error en las credenciales');
         } else {
-          setError('Error en el servidor, intente más tarde');
+          setMessage('Error en la conexión con el servidor');
         }
         return;
       }
+
       const data = await res.json();
-      if (data.access_token) {
-        localStorage.setItem('token', data.access_token);
-        setToken(data.access_token);
+
+      if (formMode === 'login') {
+        saveToken(data.access_token);
+        setMessage('');
       } else {
-        setError('Respuesta inválida del servidor');
+        // Registro exitoso, cambiar a login para que inicie sesión
+        setMessage('Registro exitoso. Por favor, inicie sesión.');
+        setFormMode('login');
+        resetForm();
       }
     } catch {
-      setError('No se pudo conectar con el servidor');
+      setMessage('Error inesperado. Intente nuevamente.');
+    } finally {
+      setLoading(false);
     }
   }
 
-  // Cierra sesión limpiando token y estado
-  function handleLogout() {
-    setToken('');
-    setIsAuthenticated(false);
-    setUser(null);
-    localStorage.removeItem('token');
-  }
-
-  // Renderiza el formulario de login o registro
-  function AuthForm({ mode }) {
+  // Componente para mostrar formulario de login o registro
+  function AuthForm() {
     return (
-      <form onSubmit={(e) => handleAuth(e, mode)} className="auth-form">
-        <h2>{mode === 'login' ? 'Iniciar Sesión' : 'Registrar Usuario'}</h2>
-        <label htmlFor="username">Usuario</label>
-        <input id="username" name="username" type="text" required autoComplete="username" />
-        <label htmlFor="password">Contraseña</label>
-        <input id="password" name="password" type="password" required autoComplete={mode === 'login' ? 'current-password' : 'new-password'} />
-        <button type="submit">{mode === 'login' ? 'Entrar' : 'Registrar'}</button>
-        {error && <p className="error">{error}</p>}
-      </form>
+      <div className="auth-container">
+        <h2>{formMode === 'login' ? 'Iniciar Sesión' : 'Registro'}</h2>
+        <form onSubmit={handleSubmit} className="auth-form" autoComplete="off">
+          <label htmlFor="username">Usuario</label>
+          <input
+            id="username"
+            type="text"
+            value={username}
+            onChange={e => setUsername(e.target.value)}
+            required
+            autoFocus
+            autoComplete="username"
+            disabled={loading}
+          />
+          <label htmlFor="password">Contraseña</label>
+          <input
+            id="password"
+            type="password"
+            value={password}
+            onChange={e => setPassword(e.target.value)}
+            required
+            autoComplete={formMode === 'login' ? 'current-password' : 'new-password'}
+            disabled={loading}
+          />
+          <button type="submit" disabled={loading}>
+            {loading ? 'Procesando...' : formMode === 'login' ? 'Entrar' : 'Registrar'}
+          </button>
+        </form>
+        {message && <p className="message">{message}</p>}
+        <p className="toggle-link">
+          {formMode === 'login' ? (
+            <>
+              ¿No tienes cuenta?{' '}
+              <button onClick={() => { setFormMode('register'); resetForm(); }} disabled={loading} className="link-button">
+                Regístrate aquí
+              </button>
+            </>
+          ) : (
+            <>
+              ¿Ya tienes cuenta?{' '}
+              <button onClick={() => { setFormMode('login'); resetForm(); }} disabled={loading} className="link-button">
+                Inicia sesión
+              </button>
+            </>
+          )}
+        </p>
+      </div>
     );
   }
 
-  // Componente protegido que muestra contenido tras login
-  function ProtectedContent() {
-    // Ejemplo simple de contenido protegido
+  // Componente para la pantalla principal protegida (ejemplo básico)
+  function Dashboard() {
+    // Estado para datos de ejemplo o reales
+    const [data, setData] = useState(null);
+    const [loadingData, setLoadingData] = useState(false);
+    const [errorData, setErrorData] = useState('');
+
+    // Ejemplo de fetch protegido a /api/protected (puede cambiarse por rutas reales)
+    useEffect(() => {
+      async function loadData() {
+        setLoadingData(true);
+        setErrorData('');
+        try {
+          const res = await fetch('/api/protected', {
+            headers: { Authorization: `Bearer ${token}` },
+          });
+          if (!res.ok) throw new Error('No autorizado');
+          const json = await res.json();
+          setData(json);
+        } catch {
+          // Datos de ejemplo como respaldo
+          setData({
+            welcome: `Bienvenido, ${user.username}`,
+            info: 'Esta es información de ejemplo porque no se pudo cargar la real.',
+          });
+          setErrorData('No se pudo cargar la información real.');
+        } finally {
+          setLoadingData(false);
+        }
+      }
+      loadData();
+    }, [token, user]);
+
     return (
-      <div className="protected-content">
-        <header>
+      <div className="dashboard-container">
+        <header className="dashboard-header">
           <h1>EDÉN - Asistente Empresarial Inteligente</h1>
-          <p>Bienvenido, <strong>{user?.username}</strong></p>
-          <button onClick={handleLogout} className="logout-button" aria-label="Cerrar sesión">Cerrar sesión</button>
+          <div>
+            <span>Usuario: {user.username}</span>{' '}
+            <button onClick={logout} className="logout-button" title="Cerrar sesión">
+              Salir
+            </button>
+          </div>
         </header>
-        <main>
-          <section>
-            <h2>Panel Principal</h2>
-            <p>{exampleData.message}</p>
-            {/* Aquí se pueden agregar más componentes y rutas protegidas */}
-          </section>
+        <main className="dashboard-main">
+          {loadingData ? (
+            <p>Cargando datos...</p>
+          ) : (
+            <>
+              {errorData && <p className="error">{errorData}</p>}
+              <section className="dashboard-welcome">
+                <h2>{data?.welcome}</h2>
+                <p>{data?.info}</p>
+              </section>
+              {/* Aquí se pueden agregar más componentes y rutas internas */}
+            </>
+          )}
         </main>
       </div>
     );
   }
 
-  // Renderizado principal
-  if (loading) {
-    return <div className="loading">Cargando...</div>;
-  }
-
-  if (!isAuthenticated) {
-    // Muestra login y registro en pestañas simples
-    const [mode, setMode] = useState('login');
-    return (
-      <div className="auth-container">
-        <nav className="auth-nav" role="tablist" aria-label="Autenticación">
-          <button
-            role="tab"
-            aria-selected={mode === 'login'}
-            onClick={() => setMode('login')}
-            className={mode === 'login' ? 'active' : ''}
-            id="tab-login"
-            aria-controls="tabpanel-login"
-            type="button"
-          >
-            Iniciar Sesión
-          </button>
-          <button
-            role="tab"
-            aria-selected={mode === 'register'}
-            onClick={() => setMode('register')}
-            className={mode === 'register' ? 'active' : ''}
-            id="tab-register"
-            aria-controls="tabpanel-register"
-            type="button"
-          >
-            Registrar
-          </button>
-        </nav>
-        <section
-          role="tabpanel"
-          id={`tabpanel-${mode}`}
-          aria-labelledby={`tab-${mode}`}
-          tabIndex={0}
-          className="auth-tabpanel"
-        >
-          <AuthForm mode={mode} />
-        </section>
-      </div>
-    );
-  }
-
-  return <ProtectedContent />;
+  // Renderizado condicional según si hay usuario autenticado
+  return (
+    <div className="app-container">
+      {user ? <Dashboard /> : <AuthForm />}
+    </div>
+  );
 }
