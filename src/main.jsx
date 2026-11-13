@@ -1,15 +1,11 @@
 import React from 'react'
 import ReactDOM from 'react-dom/client'
-import { BrowserRouter as Router } from 'react-router-dom'
 import App from './App.jsx'
 import './style.css'
 
-// Punto de entrada principal de la aplicación React.
-// Se monta el componente <App /> envuelto en <Router> para habilitar la navegación SPA.
+// Montaje de la aplicación React en el DOM, envolviendo App en el root div
 ReactDOM.createRoot(document.getElementById('root')).render(
   <React.StrictMode>
-    <Router>
-      <App />
-    </Router>
+    <App />
   </React.StrictMode>
 )
