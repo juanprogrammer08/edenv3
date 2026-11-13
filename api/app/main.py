@@ -409,5 +409,5 @@ def delete_proyecto(proy_id: int, current_user: User = Depends(get_current_user)
     db.commit()
     return JSONResponse(status_code=204, content=None)
 
-# Montar router en app
+# Montar router en app con prefijo /api para todas las rutas
 app.include_router(api_router)
