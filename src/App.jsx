@@ -174,6 +174,7 @@ function Dashboard() {
 
   // Carga datos del usuario autenticado
   useEffect(() => {
+    let isMounted = true // para evitar setState si el componente se desmonta
     async function fetchUser() {
       const token = localStorage.getItem('token')
       if (!token) {
@@ -186,19 +187,20 @@ function Dashboard() {
         })
         if (res.ok) {
           const data = await res.json()
-          setUser(data)
+          if (isMounted) setUser(data)
         } else {
           // Token inválido o expirado
           localStorage.removeItem('token')
-          navigate('/login')
+          if (isMounted) navigate('/login')
         }
       } catch {
-        setError('No se pudo conectar con el servidor')
+        if (isMounted) setError('No se pudo conectar con el servidor')
       } finally {
-        setLoading(false)
+        if (isMounted) setLoading(false)
       }
     }
     fetchUser()
+    return () => { isMounted = false }
   }, [navigate])
 
   // Cierra sesión
