@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Form, Request
+from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, APIRouter
 from fastapi.security import OAuth2PasswordRequestForm
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -234,24 +234,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Eventos de arranque para crear tablas
+# Routers
 
-@app.on_event("startup")
-async def on_startup():
-    try:
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
-    except Exception:
-        # Ignorar errores para fallback a SQLite o si DB no disponible
-        pass
+api_router = APIRouter(prefix="/api")
 
 # Rutas públicas
 
-@app.get("/health", tags=["salud"])
+@api_router.get("/health", tags=["salud"])
 async def health():
     return {"status": "ok"}
 
-@app.post("/auth/register", tags=["auth"])
+@api_router.post("/auth/register", tags=["auth"])
 async def register(
     username: str = Form(...),
     password: str = Form(...),
@@ -268,7 +261,7 @@ async def register(
     await db.refresh(new_user)
     return {"msg": "Usuario registrado correctamente"}
 
-@app.post("/auth/login", response_model=Token, tags=["auth"])
+@api_router.post("/auth/login", response_model=Token, tags=["auth"])
 async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSession = Depends(get_db)):
     user = await authenticate_user(db, form_data.username, form_data.password)
     if not user:
@@ -284,7 +277,7 @@ async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: AsyncSessi
     )
     return {"access_token": access_token, "token_type": "bearer"}
 
-@app.get("/auth/me", response_model=UserOut, tags=["auth"])
+@api_router.get("/auth/me", response_model=UserOut, tags=["auth"])
 async def read_users_me(current_user: User = Depends(get_current_user)):
     return current_user
 
@@ -292,7 +285,7 @@ async def read_users_me(current_user: User = Depends(get_current_user)):
 
 # COTIZACIONES (Quotes)
 
-@app.post("/quotes", response_model=QuoteOut, tags=["quotes"])
+@api_router.post("/quotes", response_model=QuoteOut, tags=["quotes"])
 async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     db_quote = Quote(**quote.dict(), owner_id=current_user.id)
     db.add(db_quote)
@@ -300,12 +293,12 @@ async def create_quote(quote: QuoteCreate, current_user: User = Depends(get_curr
     await db.refresh(db_quote)
     return db_quote
 
-@app.get("/quotes", response_model=List[QuoteOut], tags=["quotes"])
+@api_router.get("/quotes", response_model=List[QuoteOut], tags=["quotes"])
 async def read_quotes(skip: int = 0, limit: int = 100, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Quote).where(Quote.owner_id == current_user.id).offset(skip).limit(limit))
     return result.scalars().all()
 
-@app.get("/quotes/{quote_id}", response_model=QuoteOut, tags=["quotes"])
+@api_router.get("/quotes/{quote_id}", response_model=QuoteOut, tags=["quotes"])
 async def read_quote(quote_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Quote).where(Quote.id == quote_id, Quote.owner_id == current_user.id))
     quote = result.scalars().first()
@@ -313,7 +306,7 @@ async def read_quote(quote_id: int, current_user: User = Depends(get_current_use
         raise HTTPException(status_code=404, detail="Cotización no encontrada")
     return quote
 
-@app.put("/quotes/{quote_id}", response_model=QuoteOut, tags=["quotes"])
+@api_router.put("/quotes/{quote_id}", response_model=QuoteOut, tags=["quotes"])
 async def update_quote(quote_id: int, quote_in: QuoteCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Quote).where(Quote.id == quote_id, Quote.owner_id == current_user.id))
     quote = result.scalars().first()
@@ -325,7 +318,7 @@ async def update_quote(quote_id: int, quote_in: QuoteCreate, current_user: User 
     await db.refresh(quote)
     return quote
 
-@app.delete("/quotes/{quote_id}", status_code=204, tags=["quotes"])
+@api_router.delete("/quotes/{quote_id}", status_code=204, tags=["quotes"])
 async def delete_quote(quote_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Quote).where(Quote.id == quote_id, Quote.owner_id == current_user.id))
     quote = result.scalars().first()
@@ -337,7 +330,7 @@ async def delete_quote(quote_id: int, current_user: User = Depends(get_current_u
 
 # PROYECTOS (Projects)
 
-@app.post("/projects", response_model=ProjectOut, tags=["projects"])
+@api_router.post("/projects", response_model=ProjectOut, tags=["projects"])
 async def create_project(project: ProjectCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     db_project = Project(**project.dict(), owner_id=current_user.id)
     db.add(db_project)
@@ -345,12 +338,12 @@ async def create_project(project: ProjectCreate, current_user: User = Depends(ge
     await db.refresh(db_project)
     return db_project
 
-@app.get("/projects", response_model=List[ProjectOut], tags=["projects"])
+@api_router.get("/projects", response_model=List[ProjectOut], tags=["projects"])
 async def read_projects(skip: int = 0, limit: int = 100, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Project).where(Project.owner_id == current_user.id).offset(skip).limit(limit))
     return result.scalars().all()
 
-@app.get("/projects/{project_id}", response_model=ProjectOut, tags=["projects"])
+@api_router.get("/projects/{project_id}", response_model=ProjectOut, tags=["projects"])
 async def read_project(project_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == current_user.id))
     project = result.scalars().first()
@@ -358,7 +351,7 @@ async def read_project(project_id: int, current_user: User = Depends(get_current
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
     return project
 
-@app.put("/projects/{project_id}", response_model=ProjectOut, tags=["projects"])
+@api_router.put("/projects/{project_id}", response_model=ProjectOut, tags=["projects"])
 async def update_project(project_id: int, project_in: ProjectCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == current_user.id))
     project = result.scalars().first()
@@ -370,7 +363,7 @@ async def update_project(project_id: int, project_in: ProjectCreate, current_use
     await db.refresh(project)
     return project
 
-@app.delete("/projects/{project_id}", status_code=204, tags=["projects"])
+@api_router.delete("/projects/{project_id}", status_code=204, tags=["projects"])
 async def delete_project(project_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Project).where(Project.id == project_id, Project.owner_id == current_user.id))
     project = result.scalars().first()
@@ -382,7 +375,7 @@ async def delete_project(project_id: int, current_user: User = Depends(get_curre
 
 # TAREAS (Tasks)
 
-@app.post("/tasks", response_model=TaskOut, tags=["tasks"])
+@api_router.post("/tasks", response_model=TaskOut, tags=["tasks"])
 async def create_task(task: TaskCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     # Verificar que el proyecto pertenece al usuario
     result = await db.execute(select(Project).where(Project.id == task.project_id, Project.owner_id == current_user.id))
@@ -395,12 +388,12 @@ async def create_task(task: TaskCreate, current_user: User = Depends(get_current
     await db.refresh(db_task)
     return db_task
 
-@app.get("/tasks", response_model=List[TaskOut], tags=["tasks"])
+@api_router.get("/tasks", response_model=List[TaskOut], tags=["tasks"])
 async def read_tasks(skip: int = 0, limit: int = 100, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Task).where(Task.owner_id == current_user.id).offset(skip).limit(limit))
     return result.scalars().all()
 
-@app.get("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
+@api_router.get("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
 async def read_task(task_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Task).where(Task.id == task_id, Task.owner_id == current_user.id))
     task = result.scalars().first()
@@ -408,7 +401,7 @@ async def read_task(task_id: int, current_user: User = Depends(get_current_user)
         raise HTTPException(status_code=404, detail="Tarea no encontrada")
     return task
 
-@app.put("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
+@api_router.put("/tasks/{task_id}", response_model=TaskOut, tags=["tasks"])
 async def update_task(task_id: int, task_in: TaskCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Task).where(Task.id == task_id, Task.owner_id == current_user.id))
     task = result.scalars().first()
@@ -426,7 +419,7 @@ async def update_task(task_id: int, task_in: TaskCreate, current_user: User = De
     await db.refresh(task)
     return task
 
-@app.delete("/tasks/{task_id}", status_code=204, tags=["tasks"])
+@api_router.delete("/tasks/{task_id}", status_code=204, tags=["tasks"])
 async def delete_task(task_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Task).where(Task.id == task_id, Task.owner_id == current_user.id))
     task = result.scalars().first()
@@ -438,7 +431,7 @@ async def delete_task(task_id: int, current_user: User = Depends(get_current_use
 
 # GASTOS (Expenses)
 
-@app.post("/expenses", response_model=ExpenseOut, tags=["expenses"])
+@api_router.post("/expenses", response_model=ExpenseOut, tags=["expenses"])
 async def create_expense(expense: ExpenseCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     db_expense = Expense(**expense.dict(), owner_id=current_user.id)
     db.add(db_expense)
@@ -446,12 +439,12 @@ async def create_expense(expense: ExpenseCreate, current_user: User = Depends(ge
     await db.refresh(db_expense)
     return db_expense
 
-@app.get("/expenses", response_model=List[ExpenseOut], tags=["expenses"])
+@api_router.get("/expenses", response_model=List[ExpenseOut], tags=["expenses"])
 async def read_expenses(skip: int = 0, limit: int = 100, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Expense).where(Expense.owner_id == current_user.id).offset(skip).limit(limit))
     return result.scalars().all()
 
-@app.get("/expenses/{expense_id}", response_model=ExpenseOut, tags=["expenses"])
+@api_router.get("/expenses/{expense_id}", response_model=ExpenseOut, tags=["expenses"])
 async def read_expense(expense_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Expense).where(Expense.id == expense_id, Expense.owner_id == current_user.id))
     expense = result.scalars().first()
@@ -459,7 +452,7 @@ async def read_expense(expense_id: int, current_user: User = Depends(get_current
         raise HTTPException(status_code=404, detail="Gasto no encontrado")
     return expense
 
-@app.put("/expenses/{expense_id}", response_model=ExpenseOut, tags=["expenses"])
+@api_router.put("/expenses/{expense_id}", response_model=ExpenseOut, tags=["expenses"])
 async def update_expense(expense_id: int, expense_in: ExpenseCreate, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Expense).where(Expense.id == expense_id, Expense.owner_id == current_user.id))
     expense = result.scalars().first()
@@ -471,7 +464,7 @@ async def update_expense(expense_id: int, expense_in: ExpenseCreate, current_use
     await db.refresh(expense)
     return expense
 
-@app.delete("/expenses/{expense_id}", status_code=204, tags=["expenses"])
+@api_router.delete("/expenses/{expense_id}", status_code=204, tags=["expenses"])
 async def delete_expense(expense_id: int, current_user: User = Depends(get_current_user), db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Expense).where(Expense.id == expense_id, Expense.owner_id == current_user.id))
     expense = result.scalars().first()
@@ -480,3 +473,18 @@ async def delete_expense(expense_id: int, current_user: User = Depends(get_curre
     await db.delete(expense)
     await db.commit()
     return JSONResponse(status_code=204, content=None)
+
+# Eventos de arranque para crear tablas
+
+@app.on_event("startup")
+async def on_startup():
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    except Exception:
+        # Ignorar errores para fallback a SQLite o si DB no disponible
+        pass
+
+# Montar router principal con prefijo /api
+
+app.include_router(api_router)
