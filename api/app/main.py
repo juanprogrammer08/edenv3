@@ -1,87 +1,77 @@
-from fastapi import FastAPI, Depends, HTTPException, status, Form, Request
-from fastapi.security import OAuth2PasswordRequestForm
+from fastapi import FastAPI, Depends, HTTPException, status, Form, Request, APIRouter
+from fastapi.security import OAuth2PasswordBearer
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from fastapi.routing import APIRouter
 from jose import JWTError, jwt
 from passlib.context import CryptContext
 from sqlalchemy import create_engine, select, update, delete
-from sqlalchemy.exc import SQLAlchemyError, OperationalError
 from sqlalchemy.orm import sessionmaker, declarative_base, Session
-from sqlalchemy import Column, Integer, String, Text, Float, ForeignKey, DateTime, Boolean
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import Column, Integer, String, Float, ForeignKey, DateTime, Boolean, Text
 from sqlalchemy.orm import relationship
 from datetime import datetime, timedelta
 import os
-import logging
 
-# Configuración básica de logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-# Variables de entorno y configuración
-AUTH_SECRET = os.getenv("AUTH_SECRET", "secretclaveparajwt")
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./app.db")
+# Configuración básica y constantes
+AUTH_SECRET = os.getenv("AUTH_SECRET", "cambiameporunasecretomuyseguro")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # 7 días
 
-# Base de datos y ORM
-Base = declarative_base()
+DATABASE_URL = os.getenv(
+    "DATABASE_URL",
+    "sqlite:///./app.db"
+)
 
-# Intento de conexión a PostgreSQL, fallback a SQLite
+# Motor y sesión SQLAlchemy con fallback a SQLite
 try:
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {})
     # Test conexión
     with engine.connect() as conn:
         conn.execute("SELECT 1")
-    logger.info(f"Conectado a base de datos: {DATABASE_URL}")
-except OperationalError as e:
-    logger.warning(f"No se pudo conectar a la base de datos PostgreSQL, usando SQLite local. Error: {e}")
-    DATABASE_URL = "sqlite:///./app.db"
-    engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
-    logger.info("Conectado a base de datos SQLite local ./app.db")
+except Exception:
+    # Fallback a SQLite local
+    engine = create_engine("sqlite:///./app.db", connect_args={"check_same_thread": False})
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+Base = declarative_base()
 
 # Contexto para hashing de contraseñas
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
-# FastAPI app con root_path para que /docs y /openapi.json funcionen bajo /api
-app = FastAPI(root_path="/api", title="EDÉN - Asistente Empresarial Inteligente API")
+oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
+
+app = FastAPI(root_path="/api")
 
 # CORS (permitir frontend local y producción)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # En producción restringir a dominios específicos
+    allow_origins=["*"],  # Ajustar en producción
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Modelos ORM
+# Modelos SQLAlchemy
 
 class User(Base):
     __tablename__ = "users"
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(50), unique=True, index=True, nullable=False)
     hashed_password = Column(String(128), nullable=False)
-    full_name = Column(String(100), nullable=True)
-    email = Column(String(100), unique=True, index=True, nullable=True)
     is_active = Column(Boolean, default=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     cotizaciones = relationship("Cotizacion", back_populates="owner")
     proyectos = relationship("Proyecto", back_populates="owner")
-    tareas = relationship("Tarea", back_populates="owner")
 
 class Cotizacion(Base):
     __tablename__ = "cotizaciones"
     id = Column(Integer, primary_key=True, index=True)
-    titulo = Column(String(150), nullable=False)
+    titulo = Column(String(100), nullable=False)
     descripcion = Column(Text, nullable=True)
-    cliente = Column(String(150), nullable=True)
+    monto_estimado = Column(Float, nullable=False)
     fecha_creacion = Column(DateTime, default=datetime.utcnow)
-    estado = Column(String(50), default="pendiente")  # pendiente, aceptada, rechazada
-    total = Column(Float, default=0.0)
+    estado = Column(String(30), default="pendiente")  # pendiente, aceptada, rechazada
 
     owner_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("User", back_populates="cotizaciones")
@@ -89,114 +79,25 @@ class Cotizacion(Base):
 class Proyecto(Base):
     __tablename__ = "proyectos"
     id = Column(Integer, primary_key=True, index=True)
-    nombre = Column(String(150), nullable=False)
+    nombre = Column(String(100), nullable=False)
     descripcion = Column(Text, nullable=True)
     fecha_inicio = Column(DateTime, nullable=True)
     fecha_fin = Column(DateTime, nullable=True)
-    estado = Column(String(50), default="activo")  # activo, finalizado, cancelado
+    estado = Column(String(30), default="activo")  # activo, finalizado, cancelado
 
     owner_id = Column(Integer, ForeignKey("users.id"))
     owner = relationship("User", back_populates="proyectos")
 
-class Tarea(Base):
-    __tablename__ = "tareas"
-    id = Column(Integer, primary_key=True, index=True)
-    titulo = Column(String(150), nullable=False)
-    descripcion = Column(Text, nullable=True)
-    fecha_vencimiento = Column(DateTime, nullable=True)
-    completada = Column(Boolean, default=False)
-
-    owner_id = Column(Integer, ForeignKey("users.id"))
-    owner = relationship("User", back_populates="tareas")
-
-# Crear tablas si no existen
+# Crear tablas
 Base.metadata.create_all(bind=engine)
 
-# Schemas Pydantic para respuestas y peticiones
-
-from pydantic import BaseModel, EmailStr
-from typing import Optional, List
-
-class Token(BaseModel):
-    access_token: str
-    token_type: str
-
-class TokenData(BaseModel):
-    username: Optional[str] = None
-
-class UserBase(BaseModel):
-    username: str
-    full_name: Optional[str] = None
-    email: Optional[EmailStr] = None
-    is_active: Optional[bool] = True
-
-class UserCreate(UserBase):
-    password: str
-
-class UserOut(UserBase):
-    id: int
-
-    class Config:
-        orm_mode = True
-
-class CotizacionBase(BaseModel):
-    titulo: str
-    descripcion: Optional[str] = None
-    cliente: Optional[str] = None
-    estado: Optional[str] = "pendiente"
-    total: Optional[float] = 0.0
-
-class CotizacionCreate(CotizacionBase):
-    pass
-
-class CotizacionOut(CotizacionBase):
-    id: int
-    fecha_creacion: datetime
-    owner_id: int
-
-    class Config:
-        orm_mode = True
-
-class ProyectoBase(BaseModel):
-    nombre: str
-    descripcion: Optional[str] = None
-    fecha_inicio: Optional[datetime] = None
-    fecha_fin: Optional[datetime] = None
-    estado: Optional[str] = "activo"
-
-class ProyectoCreate(ProyectoBase):
-    pass
-
-class ProyectoOut(ProyectoBase):
-    id: int
-    owner_id: int
-
-    class Config:
-        orm_mode = True
-
-class TareaBase(BaseModel):
-    titulo: str
-    descripcion: Optional[str] = None
-    fecha_vencimiento: Optional[datetime] = None
-    completada: Optional[bool] = False
-
-class TareaCreate(TareaBase):
-    pass
-
-class TareaOut(TareaBase):
-    id: int
-    owner_id: int
-
-    class Config:
-        orm_mode = True
-
-# Funciones utilitarias para autenticación y seguridad
-
-def verify_password(plain_password: str, hashed_password: str) -> bool:
-    return pwd_context.verify(plain_password, hashed_password)
+# Funciones utilitarias
 
 def get_password_hash(password: str) -> str:
     return pwd_context.hash(password)
+
+def verify_password(plain_password: str, hashed_password: str) -> bool:
+    return pwd_context.verify(plain_password, hashed_password)
 
 def create_access_token(data: dict, expires_delta: timedelta | None = None):
     to_encode = data.copy()
@@ -205,29 +106,12 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None):
     encoded_jwt = jwt.encode(to_encode, AUTH_SECRET, algorithm=ALGORITHM)
     return encoded_jwt
 
-def get_user(db: Session, username: str) -> User | None:
-    return db.execute(select(User).where(User.username == username)).scalars().first()
-
-def authenticate_user(db: Session, username: str, password: str) -> User | None:
-    user = get_user(db, username)
-    if not user:
-        return None
-    if not verify_password(password, user.hashed_password):
-        return None
-    return user
-
-# Dependencias
-
 def get_db():
     db = SessionLocal()
     try:
         yield db
     finally:
         db.close()
-
-from fastapi.security import OAuth2PasswordBearer
-
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 
 async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = Depends(get_db)) -> User:
     credentials_exception = HTTPException(
@@ -240,194 +124,279 @@ async def get_current_user(token: str = Depends(oauth2_scheme), db: Session = De
         username: str | None = payload.get("sub")
         if username is None:
             raise credentials_exception
-        token_data = TokenData(username=username)
     except JWTError:
         raise credentials_exception
-    user = get_user(db, username=token_data.username)
+    user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
     if user is None:
         raise credentials_exception
     if not user.is_active:
         raise HTTPException(status_code=400, detail="Usuario inactivo")
     return user
 
-# Routers
+# Rutas públicas y de autenticación
 
-router = APIRouter(prefix="/api")
+router = APIRouter()
 
-# Ruta healthcheck pública
-@router.get("/health", tags=["health"])
+@router.get("/health")
 async def health():
     return {"status": "ok"}
 
-# Rutas de autenticación
-
-@router.post("/auth/register", response_model=UserOut, tags=["auth"])
-async def register(
-    username: str = Form(...),
-    password: str = Form(...),
-    full_name: str | None = Form(None),
-    email: str | None = Form(None),
-    db: Session = Depends(get_db),
-):
-    user = get_user(db, username)
-    if user:
-        raise HTTPException(status_code=400, detail="El nombre de usuario ya está en uso")
+@router.post("/auth/register", status_code=201)
+async def register(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    username = username.strip()
+    if len(username) < 3 or len(password) < 6:
+        raise HTTPException(status_code=400, detail="Usuario o contraseña demasiado cortos")
+    existing_user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
+    if existing_user:
+        raise HTTPException(status_code=400, detail="El nombre de usuario ya existe")
     hashed_password = get_password_hash(password)
-    new_user = User(
-        username=username,
-        hashed_password=hashed_password,
-        full_name=full_name,
-        email=email,
-        is_active=True,
-    )
-    db.add(new_user)
+    user = User(username=username, hashed_password=hashed_password)
+    db.add(user)
     db.commit()
-    db.refresh(new_user)
-    return new_user
+    db.refresh(user)
+    return {"msg": "Usuario registrado correctamente"}
 
-@router.post("/auth/login", response_model=Token, tags=["auth"])
-async def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depends(get_db)):
-    user = authenticate_user(db, form_data.username, form_data.password)
+@router.post("/auth/login")
+async def login(username: str = Form(...), password: str = Form(...), db: Session = Depends(get_db)):
+    user = db.execute(select(User).where(User.username == username)).scalar_one_or_none()
     if not user:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Usuario o contraseña incorrectos",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
+        raise HTTPException(status_code=400, detail="Usuario o contraseña incorrectos")
+    if not verify_password(password, user.hashed_password):
+        raise HTTPException(status_code=400, detail="Usuario o contraseña incorrectos")
     access_token_expires = timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
-    access_token = create_access_token(
-        data={"sub": user.username},
-        expires_delta=access_token_expires,
-    )
+    access_token = create_access_token(data={"sub": user.username}, expires_delta=access_token_expires)
     return {"access_token": access_token, "token_type": "bearer"}
 
-@router.get("/auth/me", response_model=UserOut, tags=["auth"])
+@router.get("/auth/me")
 async def read_users_me(current_user: User = Depends(get_current_user)):
-    return current_user
+    return {
+        "id": current_user.id,
+        "username": current_user.username,
+        "created_at": current_user.created_at.isoformat(),
+        "is_active": current_user.is_active,
+    }
 
-# CRUD Cotizaciones
+# Rutas CRUD protegidas para Cotizaciones
 
-@router.post("/cotizaciones", response_model=CotizacionOut, tags=["cotizaciones"])
-async def create_cotizacion(cotizacion: CotizacionCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db_cotizacion = Cotizacion(**cotizacion.dict(), owner_id=current_user.id)
-    db.add(db_cotizacion)
+@router.post("/cotizaciones", status_code=201)
+async def create_cotizacion(
+    titulo: str = Form(...),
+    descripcion: str | None = Form(None),
+    monto_estimado: float = Form(...),
+    estado: str = Form("pendiente"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    if monto_estimado < 0:
+        raise HTTPException(status_code=400, detail="El monto estimado debe ser positivo")
+    cotizacion = Cotizacion(
+        titulo=titulo.strip(),
+        descripcion=descripcion.strip() if descripcion else None,
+        monto_estimado=monto_estimado,
+        estado=estado,
+        owner_id=current_user.id
+    )
+    db.add(cotizacion)
     db.commit()
-    db.refresh(db_cotizacion)
-    return db_cotizacion
+    db.refresh(cotizacion)
+    return {
+        "id": cotizacion.id,
+        "titulo": cotizacion.titulo,
+        "descripcion": cotizacion.descripcion,
+        "monto_estimado": cotizacion.monto_estimado,
+        "estado": cotizacion.estado,
+        "fecha_creacion": cotizacion.fecha_creacion.isoformat(),
+    }
 
-@router.get("/cotizaciones", response_model=List[CotizacionOut], tags=["cotizaciones"])
+@router.get("/cotizaciones")
 async def list_cotizaciones(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     cotizaciones = db.execute(select(Cotizacion).where(Cotizacion.owner_id == current_user.id)).scalars().all()
-    return cotizaciones
+    return [
+        {
+            "id": c.id,
+            "titulo": c.titulo,
+            "descripcion": c.descripcion,
+            "monto_estimado": c.monto_estimado,
+            "estado": c.estado,
+            "fecha_creacion": c.fecha_creacion.isoformat(),
+        }
+        for c in cotizaciones
+    ]
 
-@router.get("/cotizaciones/{cotizacion_id}", response_model=CotizacionOut, tags=["cotizaciones"])
+@router.get("/cotizaciones/{cotizacion_id}")
 async def get_cotizacion(cotizacion_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    cotizacion = db.execute(select(Cotizacion).where(Cotizacion.id == cotizacion_id, Cotizacion.owner_id == current_user.id)).scalars().first()
+    cotizacion = db.execute(
+        select(Cotizacion).where(Cotizacion.id == cotizacion_id, Cotizacion.owner_id == current_user.id)
+    ).scalar_one_or_none()
     if not cotizacion:
         raise HTTPException(status_code=404, detail="Cotización no encontrada")
-    return cotizacion
+    return {
+        "id": cotizacion.id,
+        "titulo": cotizacion.titulo,
+        "descripcion": cotizacion.descripcion,
+        "monto_estimado": cotizacion.monto_estimado,
+        "estado": cotizacion.estado,
+        "fecha_creacion": cotizacion.fecha_creacion.isoformat(),
+    }
 
-@router.put("/cotizaciones/{cotizacion_id}", response_model=CotizacionOut, tags=["cotizaciones"])
-async def update_cotizacion(cotizacion_id: int, cotizacion: CotizacionCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db_cotizacion = db.execute(select(Cotizacion).where(Cotizacion.id == cotizacion_id, Cotizacion.owner_id == current_user.id)).scalars().first()
-    if not db_cotizacion:
+@router.put("/cotizaciones/{cotizacion_id}")
+async def update_cotizacion(
+    cotizacion_id: int,
+    titulo: str = Form(...),
+    descripcion: str | None = Form(None),
+    monto_estimado: float = Form(...),
+    estado: str = Form("pendiente"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    cotizacion = db.execute(
+        select(Cotizacion).where(Cotizacion.id == cotizacion_id, Cotizacion.owner_id == current_user.id)
+    ).scalar_one_or_none()
+    if not cotizacion:
         raise HTTPException(status_code=404, detail="Cotización no encontrada")
-    for key, value in cotizacion.dict().items():
-        setattr(db_cotizacion, key, value)
+    if monto_estimado < 0:
+        raise HTTPException(status_code=400, detail="El monto estimado debe ser positivo")
+    cotizacion.titulo = titulo.strip()
+    cotizacion.descripcion = descripcion.strip() if descripcion else None
+    cotizacion.monto_estimado = monto_estimado
+    cotizacion.estado = estado
+    db.add(cotizacion)
     db.commit()
-    db.refresh(db_cotizacion)
-    return db_cotizacion
+    db.refresh(cotizacion)
+    return {
+        "id": cotizacion.id,
+        "titulo": cotizacion.titulo,
+        "descripcion": cotizacion.descripcion,
+        "monto_estimado": cotizacion.monto_estimado,
+        "estado": cotizacion.estado,
+        "fecha_creacion": cotizacion.fecha_creacion.isoformat(),
+    }
 
-@router.delete("/cotizaciones/{cotizacion_id}", status_code=204, tags=["cotizaciones"])
+@router.delete("/cotizaciones/{cotizacion_id}", status_code=204)
 async def delete_cotizacion(cotizacion_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    cotizacion = db.execute(select(Cotizacion).where(Cotizacion.id == cotizacion_id, Cotizacion.owner_id == current_user.id)).scalars().first()
+    cotizacion = db.execute(
+        select(Cotizacion).where(Cotizacion.id == cotizacion_id, Cotizacion.owner_id == current_user.id)
+    ).scalar_one_or_none()
     if not cotizacion:
         raise HTTPException(status_code=404, detail="Cotización no encontrada")
     db.delete(cotizacion)
     db.commit()
     return JSONResponse(status_code=204, content=None)
 
-# CRUD Proyectos
+# Rutas CRUD protegidas para Proyectos
 
-@router.post("/proyectos", response_model=ProyectoOut, tags=["proyectos"])
-async def create_proyecto(proyecto: ProyectoCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db_proyecto = Proyecto(**proyecto.dict(), owner_id=current_user.id)
-    db.add(db_proyecto)
+@router.post("/proyectos", status_code=201)
+async def create_proyecto(
+    nombre: str = Form(...),
+    descripcion: str | None = Form(None),
+    fecha_inicio: str | None = Form(None),
+    fecha_fin: str | None = Form(None),
+    estado: str = Form("activo"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    try:
+        fi = datetime.fromisoformat(fecha_inicio) if fecha_inicio else None
+        ff = datetime.fromisoformat(fecha_fin) if fecha_fin else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido, usar ISO 8601")
+    proyecto = Proyecto(
+        nombre=nombre.strip(),
+        descripcion=descripcion.strip() if descripcion else None,
+        fecha_inicio=fi,
+        fecha_fin=ff,
+        estado=estado,
+        owner_id=current_user.id
+    )
+    db.add(proyecto)
     db.commit()
-    db.refresh(db_proyecto)
-    return db_proyecto
+    db.refresh(proyecto)
+    return {
+        "id": proyecto.id,
+        "nombre": proyecto.nombre,
+        "descripcion": proyecto.descripcion,
+        "fecha_inicio": proyecto.fecha_inicio.isoformat() if proyecto.fecha_inicio else None,
+        "fecha_fin": proyecto.fecha_fin.isoformat() if proyecto.fecha_fin else None,
+        "estado": proyecto.estado,
+    }
 
-@router.get("/proyectos", response_model=List[ProyectoOut], tags=["proyectos"])
+@router.get("/proyectos")
 async def list_proyectos(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
     proyectos = db.execute(select(Proyecto).where(Proyecto.owner_id == current_user.id)).scalars().all()
-    return proyectos
+    return [
+        {
+            "id": p.id,
+            "nombre": p.nombre,
+            "descripcion": p.descripcion,
+            "fecha_inicio": p.fecha_inicio.isoformat() if p.fecha_inicio else None,
+            "fecha_fin": p.fecha_fin.isoformat() if p.fecha_fin else None,
+            "estado": p.estado,
+        }
+        for p in proyectos
+    ]
 
-@router.get("/proyectos/{proyecto_id}", response_model=ProyectoOut, tags=["proyectos"])
+@router.get("/proyectos/{proyecto_id}")
 async def get_proyecto(proyecto_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    proyecto = db.execute(select(Proyecto).where(Proyecto.id == proyecto_id, Proyecto.owner_id == current_user.id)).scalars().first()
+    proyecto = db.execute(
+        select(Proyecto).where(Proyecto.id == proyecto_id, Proyecto.owner_id == current_user.id)
+    ).scalar_one_or_none()
     if not proyecto:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
-    return proyecto
+    return {
+        "id": proyecto.id,
+        "nombre": proyecto.nombre,
+        "descripcion": proyecto.descripcion,
+        "fecha_inicio": proyecto.fecha_inicio.isoformat() if proyecto.fecha_inicio else None,
+        "fecha_fin": proyecto.fecha_fin.isoformat() if proyecto.fecha_fin else None,
+        "estado": proyecto.estado,
+    }
 
-@router.put("/proyectos/{proyecto_id}", response_model=ProyectoOut, tags=["proyectos"])
-async def update_proyecto(proyecto_id: int, proyecto: ProyectoCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db_proyecto = db.execute(select(Proyecto).where(Proyecto.id == proyecto_id, Proyecto.owner_id == current_user.id)).scalars().first()
-    if not db_proyecto:
+@router.put("/proyectos/{proyecto_id}")
+async def update_proyecto(
+    proyecto_id: int,
+    nombre: str = Form(...),
+    descripcion: str | None = Form(None),
+    fecha_inicio: str | None = Form(None),
+    fecha_fin: str | None = Form(None),
+    estado: str = Form("activo"),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    proyecto = db.execute(
+        select(Proyecto).where(Proyecto.id == proyecto_id, Proyecto.owner_id == current_user.id)
+    ).scalar_one_or_none()
+    if not proyecto:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
-    for key, value in proyecto.dict().items():
-        setattr(db_proyecto, key, value)
+    try:
+        fi = datetime.fromisoformat(fecha_inicio) if fecha_inicio else None
+        ff = datetime.fromisoformat(fecha_fin) if fecha_fin else None
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Formato de fecha inválido, usar ISO 8601")
+    proyecto.nombre = nombre.strip()
+    proyecto.descripcion = descripcion.strip() if descripcion else None
+    proyecto.fecha_inicio = fi
+    proyecto.fecha_fin = ff
+    proyecto.estado = estado
+    db.add(proyecto)
     db.commit()
-    db.refresh(db_proyecto)
-    return db_proyecto
+    db.refresh(proyecto)
+    return {
+        "id": proyecto.id,
+        "nombre": proyecto.nombre,
+        "descripcion": proyecto.descripcion,
+        "fecha_inicio": proyecto.fecha_inicio.isoformat() if proyecto.fecha_inicio else None,
+        "fecha_fin": proyecto.fecha_fin.isoformat() if proyecto.fecha_fin else None,
+        "estado": proyecto.estado,
+    }
 
-@router.delete("/proyectos/{proyecto_id}", status_code=204, tags=["proyectos"])
+@router.delete("/proyectos/{proyecto_id}", status_code=204)
 async def delete_proyecto(proyecto_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    proyecto = db.execute(select(Proyecto).where(Proyecto.id == proyecto_id, Proyecto.owner_id == current_user.id)).scalars().first()
+    proyecto = db.execute(
+        select(Proyecto).where(Proyecto.id == proyecto_id, Proyecto.owner_id == current_user.id)
+    ).scalar_one_or_none()
     if not proyecto:
         raise HTTPException(status_code=404, detail="Proyecto no encontrado")
     db.delete(proyecto)
-    db.commit()
-    return JSONResponse(status_code=204, content=None)
-
-# CRUD Tareas
-
-@router.post("/tareas", response_model=TareaOut, tags=["tareas"])
-async def create_tarea(tarea: TareaCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db_tarea = Tarea(**tarea.dict(), owner_id=current_user.id)
-    db.add(db_tarea)
-    db.commit()
-    db.refresh(db_tarea)
-    return db_tarea
-
-@router.get("/tareas", response_model=List[TareaOut], tags=["tareas"])
-async def list_tareas(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    tareas = db.execute(select(Tarea).where(Tarea.owner_id == current_user.id)).scalars().all()
-    return tareas
-
-@router.get("/tareas/{tarea_id}", response_model=TareaOut, tags=["tareas"])
-async def get_tarea(tarea_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    tarea = db.execute(select(Tarea).where(Tarea.id == tarea_id, Tarea.owner_id == current_user.id)).scalars().first()
-    if not tarea:
-        raise HTTPException(status_code=404, detail="Tarea no encontrada")
-    return tarea
-
-@router.put("/tareas/{tarea_id}", response_model=TareaOut, tags=["tareas"])
-async def update_tarea(tarea_id: int, tarea: TareaCreate, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    db_tarea = db.execute(select(Tarea).where(Tarea.id == tarea_id, Tarea.owner_id == current_user.id)).scalars().first()
-    if not db_tarea:
-        raise HTTPException(status_code=404, detail="Tarea no encontrada")
-    for key, value in tarea.dict().items():
-        setattr(db_tarea, key, value)
-    db.commit()
-    db.refresh(db_tarea)
-    return db_tarea
-
-@router.delete("/tareas/{tarea_id}", status_code=204, tags=["tareas"])
-async def delete_tarea(tarea_id: int, current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    tarea = db.execute(select(Tarea).where(Tarea.id == tarea_id, Tarea.owner_id == current_user.id)).scalars().first()
-    if not tarea:
-        raise HTTPException(status_code=404, detail="Tarea no encontrada")
-    db.delete(tarea)
     db.commit()
     return JSONResponse(status_code=204, content=None)
 
